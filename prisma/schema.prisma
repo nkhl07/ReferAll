@@ -1,0 +1,149 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model User {
+  id              String    @id @default(cuid())
+  name            String?
+  email           String    @unique
+  emailVerified   DateTime?
+  image           String?
+  resume          String?   @db.Text
+  bio             String?   @db.Text
+  targetCompanies String?
+  targetRoles     String?
+  targetSectors   String?
+  emailProvider   String?        // "google" | "microsoft-entra-id"
+  meetingProvider String?        // "zoom" | "teams"
+  accounts        Account[]
+  apolloLookups   ApolloLookup[]
+  sessions        Session[]
+  contacts        Contact[]
+  emails          Email[]
+  meetings        Meeting[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Contact {
+  id                String         @id @default(cuid())
+  userId            String
+  user              User           @relation(fields: [userId], references: [id])
+  name              String
+  email             String?
+  company           String?
+  role              String?
+  sector            String?
+  location          String?
+  apolloId          String?
+  workDescription   String?        @db.Text
+  linkedinUrl       String?
+  linkedinSummary   String?        @db.Text
+  sharedExperiences String?        @db.Text
+  fitScore          Int?
+  notes             String?        @db.Text
+  status            String         @default("new")
+  emails            Email[]
+  meetings          Meeting[]
+  apolloLookups     ApolloLookup[]
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@unique([userId, apolloId])
+}
+
+model Email {
+  id        String     @id @default(cuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id])
+  contactId String?
+  contact   Contact?   @relation(fields: [contactId], references: [id])
+  subject   String
+  body      String     @db.Text
+  template  String
+  sentAt    DateTime?
+  repliedAt DateTime?
+  followUps FollowUp[]
+  createdAt DateTime   @default(now())
+}
+
+model FollowUp {
+  id             String    @id @default(cuid())
+  emailId        String
+  email          Email     @relation(fields: [emailId], references: [id])
+  followUpNumber Int
+  status         String    @default("pending")
+  scheduledDate  DateTime
+  body           String?   @db.Text
+  sentAt         DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+model ApolloLookup {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  apolloId   String
+  contactId  String?
+  contact    Contact? @relation(fields: [contactId], references: [id])
+  creditUsed Boolean  @default(false)
+  createdAt  DateTime @default(now())
+}
+
+model Meeting {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  contactId       String
+  contact         Contact  @relation(fields: [contactId], references: [id])
+  title           String
+  dateTime        DateTime
+  meetingLink     String?  // Zoom or Teams join URL
+  meetingProvider String?  // "zoom" | "teams"
+  calendarEventId String?
+  rating          Int?
+  notes           String?  @db.Text
+  status          String   @default("scheduled")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}

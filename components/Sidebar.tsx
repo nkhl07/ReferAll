@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Send, Settings, X, Menu, Search, PenSquare } from "lucide-react";
+import { LayoutDashboard, Send, Settings, X, Menu, Search, PenSquare, Target } from "lucide-react";
 import { useState } from "react";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/dashboard/campaigns", label: "Campaigns", icon: Target },
   { href: "/dashboard/find", label: "Find People", icon: Search },
   { href: "/dashboard/compose", label: "Compose Email", icon: PenSquare },
   { href: "/dashboard/sent", label: "Sent Emails", icon: Send },

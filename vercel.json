@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/check-follow-ups",
       "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/cron/check-replies",
+      "schedule": "0 15 * * *"
     }
   ]
 }

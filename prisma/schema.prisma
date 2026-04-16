@@ -60,14 +60,15 @@ model User {
   contacts        Contact[]
   emails          Email[]
   meetings        Meeting[]
+  campaigns       Campaign[]
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 }
 
 model Contact {
-  id                String         @id @default(cuid())
+  id                String           @id @default(cuid())
   userId            String
-  user              User           @relation(fields: [userId], references: [id])
+  user              User             @relation(fields: [userId], references: [id])
   name              String
   email             String?
   company           String?
@@ -75,18 +76,19 @@ model Contact {
   sector            String?
   location          String?
   apolloId          String?
-  workDescription   String?        @db.Text
+  workDescription   String?          @db.Text
   linkedinUrl       String?
-  linkedinSummary   String?        @db.Text
-  sharedExperiences String?        @db.Text
+  linkedinSummary   String?          @db.Text
+  sharedExperiences String?          @db.Text
   fitScore          Int?
-  notes             String?        @db.Text
-  status            String         @default("new")
+  notes             String?          @db.Text
+  status            String           @default("new")
   emails            Email[]
   meetings          Meeting[]
   apolloLookups     ApolloLookup[]
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  campaignTargets   CampaignTarget[]
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 
   @@unique([userId, apolloId])
 }
@@ -146,4 +148,100 @@ model Meeting {
   status          String   @default("scheduled")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+}
+
+// ── Campaign system ────────────────────────────────────────────────────────────
+
+enum ApprovalMode {
+  SUPERVISED
+  AUTONOMOUS
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  COMPLETED
+}
+
+enum TargetStatus {
+  DISCOVERED
+  EVALUATED
+  APPROVED
+  QUEUED
+  CONTACTED
+  FOLLOWED_UP
+  REPLIED
+  MEETING_SET
+  DECLINED
+  NO_RESPONSE
+  SKIPPED
+}
+
+model Campaign {
+  id                  String         @id @default(cuid())
+  userId              String
+  user                User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name                String
+  goal                String         @db.Text
+  industry            String
+  targetCompanies     String[]
+  targetRoles         String[]
+  targetSeniority     String[]
+  preferAlumni        Boolean        @default(true)
+  preferredChannel    String         @default("email")
+  maxOutreachPerDay   Int            @default(5)
+  followUpAfterDays   Int            @default(3)
+  maxFollowUps        Int            @default(2)
+  dailyBudgetCredits  Int            @default(10)
+  approvalMode        ApprovalMode   @default(SUPERVISED)
+  status              CampaignStatus @default(DRAFT)
+  startedAt           DateTime?
+  pausedAt            DateTime?
+  completedAt         DateTime?
+  totalContacted      Int            @default(0)
+  totalReplies        Int            @default(0)
+  totalMeetings       Int            @default(0)
+  replyRate           Float          @default(0)
+  meetingRate         Float          @default(0)
+  campaignTargets     CampaignTarget[]
+  agentLogs           AgentLog[]
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+}
+
+model CampaignTarget {
+  id              String       @id @default(cuid())
+  campaignId      String
+  campaign        Campaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contactId       String?
+  contact         Contact?     @relation(fields: [contactId], references: [id])
+  apolloPersonId  String?
+  fullName        String
+  title           String?
+  company         String?
+  email           String?
+  linkedinUrl     String?
+  relevanceScore  Float?
+  selectedAngle   String?      @db.Text
+  selectedChannel String?
+  reasoningLog    String?      @db.Text
+  status          TargetStatus @default(DISCOVERED)
+  scheduledFor    DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+}
+
+model AgentLog {
+  id         String   @id @default(cuid())
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  targetId   String?
+  action     String
+  reasoning  String   @db.Text
+  input      Json?
+  output     Json?
+  tokensUsed Int?
+  model      String?
+  createdAt  DateTime @default(now())
 }

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { sendEmail } from "@/lib/services/email";
 import OpenAI from "openai";
 import { addDays } from "date-fns";
 
@@ -40,9 +41,10 @@ export async function POST(req: Request) {
   const created: string[] = [];
 
   for (const email of emailsNeedingFollowUp1) {
+    if (!email.contact) continue;
     try {
       const body = await generateFollowUpBody(email.body, email.contact.name, 1);
-      await prisma.followUp.create({
+      const followUp = await prisma.followUp.create({
         data: {
           emailId: email.id,
           followUpNumber: 1,
@@ -51,6 +53,15 @@ export async function POST(req: Request) {
           body,
         },
       });
+
+      if (email.contact?.email) {
+        await sendEmail(email.userId, email.contact.email, `Re: ${email.subject}`, body);
+        await prisma.followUp.update({
+          where: { id: followUp.id },
+          data: { status: "sent", sentAt: new Date() },
+        });
+      }
+
       created.push(`FU1:${email.id}`);
     } catch (e) {
       console.error("Failed to create follow-up 1 for", email.id, e);
@@ -58,9 +69,10 @@ export async function POST(req: Request) {
   }
 
   for (const email of emailsNeedingFollowUp2) {
+    if (!email.contact) continue;
     try {
       const body = await generateFollowUpBody(email.body, email.contact.name, 2);
-      await prisma.followUp.create({
+      const followUp = await prisma.followUp.create({
         data: {
           emailId: email.id,
           followUpNumber: 2,
@@ -69,6 +81,15 @@ export async function POST(req: Request) {
           body,
         },
       });
+
+      if (email.contact?.email) {
+        await sendEmail(email.userId, email.contact.email, `Re: ${email.subject}`, body);
+        await prisma.followUp.update({
+          where: { id: followUp.id },
+          data: { status: "sent", sentAt: new Date() },
+        });
+      }
+
       created.push(`FU2:${email.id}`);
     } catch (e) {
       console.error("Failed to create follow-up 2 for", email.id, e);

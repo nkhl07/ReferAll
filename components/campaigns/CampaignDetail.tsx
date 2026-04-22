@@ -1,14 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Play, Pause, Edit2, Users, MessageSquare, Calendar,
-  TrendingUp, Bot, Settings, Loader2, AlertTriangle,
+  Play, Pause, Edit2, Users,
+  Bot, Settings, Loader2, AlertTriangle,
+  CheckCircle, X, ChevronDown, ChevronUp, Mail,
 } from "lucide-react";
-import type { Campaign, CampaignTarget, AgentLog, CampaignStatus, TargetStatus } from "@prisma/client";
+import type { Campaign, CampaignTarget, AgentLog, CampaignStatus, TargetStatus, ApprovalMode } from "@prisma/client";
 import { format } from "date-fns";
 
 type CampaignFull = Campaign & { campaignTargets: CampaignTarget[]; agentLogs: AgentLog[] };
@@ -24,26 +24,23 @@ const STATUS_STYLES: Record<CampaignStatus, string> = {
 
 const PIPELINE_COLUMNS: { status: TargetStatus; label: string; color: string }[] = [
   { status: "DISCOVERED", label: "Discovered", color: "text-[var(--text-secondary)]" },
-  { status: "EVALUATED", label: "Evaluated", color: "text-[var(--accent)]" },
-  { status: "QUEUED", label: "Queued", color: "text-[var(--warning)]" },
+  { status: "APPROVED", label: "Approved", color: "text-[var(--accent)]" },
   { status: "CONTACTED", label: "Contacted", color: "text-[var(--text-primary)]" },
+  { status: "FOLLOWED_UP", label: "Followed Up", color: "text-[var(--warning)]" },
   { status: "REPLIED", label: "Replied", color: "text-[var(--success)]" },
   { status: "MEETING_SET", label: "Meeting Set", color: "text-[var(--success)]" },
 ];
 
-const TARGET_STATUS_STYLE: Partial<Record<TargetStatus, string>> = {
-  DISCOVERED: "bg-[var(--bg-hover)] text-[var(--text-secondary)]",
-  EVALUATED: "bg-[var(--accent-subtle)] text-[var(--accent)]",
-  APPROVED: "bg-[var(--accent-subtle)] text-[var(--accent)]",
-  QUEUED: "bg-[var(--warning)]/10 text-[var(--warning)]",
-  CONTACTED: "bg-[var(--bg-hover)] text-[var(--text-primary)]",
-  FOLLOWED_UP: "bg-[var(--warning)]/10 text-[var(--warning)]",
-  REPLIED: "bg-[var(--success)]/10 text-[var(--success)]",
-  MEETING_SET: "bg-[var(--success)]/10 text-[var(--success)]",
-  DECLINED: "bg-[var(--danger)]/10 text-[var(--danger)]",
-  NO_RESPONSE: "bg-[var(--bg-hover)] text-[var(--text-secondary)]",
-  SKIPPED: "bg-[var(--bg-hover)] text-[var(--text-secondary)]",
-};
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function parseDraft(reasoningLog: string | null): { subject: string; body: string } | null {
+  if (!reasoningLog) return null;
+  try {
+    return JSON.parse(reasoningLog) as { subject: string; body: string };
+  } catch {
+    return null;
+  }
+}
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -59,7 +56,42 @@ function MetricCard({ label, value, sub }: { label: string; value: string | numb
   );
 }
 
-function PipelineTab({ targets }: { targets: CampaignTarget[] }) {
+function PipelineTab({
+  targets,
+  campaignId,
+  approvalMode,
+  isActive,
+  onStatusChange,
+}: {
+  targets: CampaignTarget[];
+  campaignId: string;
+  approvalMode: ApprovalMode;
+  isActive: boolean;
+  onStatusChange: (targetIds: string[], newStatus: TargetStatus) => void;
+}) {
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  const showApprovalButtons = approvalMode === "SUPERVISED" && isActive;
+
+  const updateTargetStatus = async (targetId: string, status: "APPROVED" | "SKIPPED") => {
+    setPending((p) => new Set(p).add(targetId));
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/targets/${targetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (res.ok) {
+        onStatusChange([targetId], status);
+      }
+    } finally {
+      setPending((p) => {
+        const next = new Set(p);
+        next.delete(targetId);
+        return next;
+      });
+    }
+  };
+
   if (targets.length === 0) {
     return (
       <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-card)] px-8 py-16 text-center">
@@ -77,61 +109,339 @@ function PipelineTab({ targets }: { targets: CampaignTarget[] }) {
   }
 
   return (
-    <div className="overflow-x-auto pb-4">
-      <div className="flex gap-4 min-w-max">
-        {PIPELINE_COLUMNS.map(({ status, label, color }) => {
-          const colTargets = targets.filter((t) => t.status === status);
-          return (
-            <div key={status} className="w-56 shrink-0">
-              <div className="flex items-center justify-between mb-3">
-                <span className={`text-xs font-semibold ${color}`}>{label}</span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--bg-hover)] text-[var(--text-secondary)]">
-                  {colTargets.length}
-                </span>
-              </div>
-              <div className="space-y-2">
-                {colTargets.map((t) => (
-                  <div
-                    key={t.id}
-                    className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--bg-card)] p-3"
-                  >
-                    <p className="text-xs font-medium text-[var(--text-primary)] truncate">{t.fullName}</p>
-                    {t.title && (
-                      <p className="text-[11px] text-[var(--text-secondary)] truncate mt-0.5">{t.title}</p>
-                    )}
-                    {t.company && (
-                      <p className="text-[11px] text-[var(--text-secondary)] truncate">{t.company}</p>
-                    )}
-                    {t.relevanceScore != null && (
-                      <div className="mt-2 flex items-center gap-1.5">
-                        <div className="flex-1 h-1 rounded-full bg-[var(--bg-hover)] overflow-hidden">
-                          <div
-                            className="h-full bg-[var(--accent)] rounded-full"
-                            style={{ width: `${Math.round(t.relevanceScore * 100)}%` }}
-                          />
+    <div className="space-y-4">
+      {showApprovalButtons && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-sm)] border border-[var(--accent)]/20 bg-[var(--accent-subtle)]">
+          <Bot size={13} className="text-[var(--accent)] shrink-0" />
+          <p className="text-xs text-[var(--accent)]">
+            <span className="font-medium">Supervised mode</span> — use the Approvals tab to review and approve contacts before outreach is sent.
+          </p>
+        </div>
+      )}
+      <div className="overflow-x-auto pb-4">
+        <div className="flex gap-4 min-w-max">
+          {PIPELINE_COLUMNS.map(({ status, label, color }) => {
+            const colTargets = targets.filter((t) => t.status === status);
+            return (
+              <div key={status} className="w-56 shrink-0">
+                <div className="flex items-center justify-between mb-3">
+                  <span className={`text-xs font-semibold ${color}`}>{label}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[var(--bg-hover)] text-[var(--text-secondary)]">
+                    {colTargets.length}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {colTargets.map((t) => (
+                    <div
+                      key={t.id}
+                      className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--bg-card)] p-3"
+                    >
+                      <p className="text-xs font-medium text-[var(--text-primary)] truncate">{t.fullName}</p>
+                      {t.title && (
+                        <p className="text-[11px] text-[var(--text-secondary)] truncate mt-0.5">{t.title}</p>
+                      )}
+                      {t.company && (
+                        <p className="text-[11px] text-[var(--text-secondary)] truncate">{t.company}</p>
+                      )}
+                      {t.relevanceScore != null && (
+                        <div className="mt-2 flex items-center gap-1.5">
+                          <div className="flex-1 h-1 rounded-full bg-[var(--bg-hover)] overflow-hidden">
+                            <div
+                              className="h-full bg-[var(--accent)] rounded-full"
+                              style={{ width: `${Math.round(t.relevanceScore * 100)}%` }}
+                            />
+                          </div>
+                          <span className="text-[10px] text-[var(--text-secondary)]">
+                            {Math.round(t.relevanceScore * 100)}%
+                          </span>
                         </div>
+                      )}
+                      {status === "DISCOVERED" && showApprovalButtons && (
+                        <div className="flex gap-1 mt-2.5 pt-2 border-t border-[var(--border)]">
+                          <button
+                            disabled={pending.has(t.id)}
+                            onClick={() => updateTargetStatus(t.id, "APPROVED")}
+                            className="flex flex-1 items-center justify-center gap-1 py-1 rounded text-[10px] font-medium bg-[var(--accent-subtle)] text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors disabled:opacity-40"
+                          >
+                            {pending.has(t.id) ? (
+                              <Loader2 size={10} className="animate-spin" />
+                            ) : (
+                              <CheckCircle size={10} />
+                            )}
+                            Approve
+                          </button>
+                          <button
+                            disabled={pending.has(t.id)}
+                            onClick={() => updateTargetStatus(t.id, "SKIPPED")}
+                            className="flex items-center justify-center px-2 py-1 rounded text-[var(--text-secondary)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-colors disabled:opacity-40"
+                            title="Skip"
+                          >
+                            <X size={10} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {colTargets.length === 0 && (
+                    <div className="rounded-[var(--radius-sm)] border border-dashed border-[var(--border)] px-3 py-5 text-center">
+                      <p className="text-[11px] text-[var(--text-secondary)]">Empty</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ApprovalsTab({
+  targets: initialTargets,
+  campaignId,
+  onStatusChange,
+}: {
+  targets: CampaignTarget[];
+  campaignId: string;
+  onStatusChange: (targetIds: string[], newStatus: TargetStatus) => void;
+}) {
+  const [targets, setTargets] = useState(() => initialTargets.filter((t) => t.status === "DISCOVERED"));
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [individualPending, setIndividualPending] = useState<Set<string>>(new Set());
+
+  const allSelected = targets.length > 0 && selected.size === targets.length;
+
+  const toggleSelect = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const toggleAll = () =>
+    setSelected(allSelected ? new Set() : new Set(targets.map((t) => t.id)));
+
+  const removeTargets = (ids: string[], newStatus: TargetStatus) => {
+    setTargets((prev) => prev.filter((t) => !ids.includes(t.id)));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+    onStatusChange(ids, newStatus);
+  };
+
+  const bulkAction = async (action: "approve" | "reject") => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    setBulkLoading(true);
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/approve-targets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetIds: ids, action }),
+      });
+      if (res.ok) {
+        removeTargets(ids, action === "approve" ? "APPROVED" : "SKIPPED");
+      }
+    } finally {
+      setBulkLoading(false);
+    }
+  };
+
+  const individualAction = async (targetId: string, action: "approve" | "reject") => {
+    setIndividualPending((p) => new Set(p).add(targetId));
+    try {
+      const res = await fetch(`/api/campaigns/${campaignId}/targets/${targetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: action === "approve" ? "APPROVED" : "SKIPPED" }),
+      });
+      if (res.ok) {
+        removeTargets([targetId], action === "approve" ? "APPROVED" : "SKIPPED");
+      }
+    } finally {
+      setIndividualPending((p) => {
+        const next = new Set(p);
+        next.delete(targetId);
+        return next;
+      });
+    }
+  };
+
+  if (targets.length === 0) {
+    return (
+      <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-card)] px-8 py-16 text-center">
+        <div className="w-10 h-10 rounded-full bg-[var(--success)]/10 border border-[var(--success)]/20 flex items-center justify-center mx-auto mb-3">
+          <CheckCircle size={18} className="text-[var(--success)]" />
+        </div>
+        <p className="text-sm text-[var(--text-primary)] font-medium mb-1" style={{ fontFamily: "var(--font-heading)" }}>
+          All caught up
+        </p>
+        <p className="text-xs text-[var(--text-secondary)]">
+          No contacts waiting for approval. New ones will appear here after the next discovery run.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Bulk action bar */}
+      <div className="flex items-center justify-between px-3 py-2.5 rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--bg-card)]">
+        <div className="flex items-center gap-3">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            onChange={toggleAll}
+            className="w-3.5 h-3.5 rounded accent-[var(--accent)] cursor-pointer"
+          />
+          <span className="text-xs text-[var(--text-secondary)]">
+            {selected.size > 0 ? `${selected.size} of ${targets.length} selected` : `${targets.length} pending approval`}
+          </span>
+        </div>
+        {selected.size > 0 && (
+          <div className="flex items-center gap-2">
+            <button
+              disabled={bulkLoading}
+              onClick={() => bulkAction("approve")}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-[var(--radius-sm)] bg-[var(--accent-subtle)] text-[var(--accent)] text-xs font-medium hover:bg-[var(--accent)]/20 transition-colors disabled:opacity-40"
+            >
+              {bulkLoading ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle size={11} />}
+              Approve {selected.size}
+            </button>
+            <button
+              disabled={bulkLoading}
+              onClick={() => bulkAction("reject")}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-[var(--radius-sm)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-medium hover:bg-[var(--danger)]/10 transition-colors disabled:opacity-40"
+            >
+              <X size={11} />
+              Reject {selected.size}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Target cards */}
+      {targets.map((target) => {
+        const draft = parseDraft(target.reasoningLog);
+        const isExpanded = expandedId === target.id;
+        const isPending = individualPending.has(target.id);
+
+        return (
+          <div
+            key={target.id}
+            className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-card)] p-4"
+          >
+            <div className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={selected.has(target.id)}
+                onChange={() => toggleSelect(target.id)}
+                className="mt-0.5 w-3.5 h-3.5 rounded accent-[var(--accent)] cursor-pointer shrink-0"
+              />
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-[var(--text-primary)]">{target.fullName}</p>
+                    {target.title && (
+                      <p className="text-xs text-[var(--text-secondary)] mt-0.5">{target.title}</p>
+                    )}
+                    {target.company && (
+                      <p className="text-xs text-[var(--text-secondary)]">{target.company}</p>
+                    )}
+                    <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                      {target.relevanceScore != null && (
                         <span className="text-[10px] text-[var(--text-secondary)]">
-                          {Math.round(t.relevanceScore * 100)}%
+                          {Math.round(target.relevanceScore * 100)}% fit
                         </span>
+                      )}
+                      {target.linkedinUrl && (
+                        <a
+                          href={target.linkedinUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] text-[var(--accent)] hover:underline"
+                        >
+                          LinkedIn ↗
+                        </a>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {draft && (
+                      <button
+                        onClick={() => setExpandedId(isExpanded ? null : target.id)}
+                        className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
+                      >
+                        <Mail size={10} />
+                        {isExpanded ? (
+                          <>Hide draft <ChevronUp size={10} /></>
+                        ) : (
+                          <>View draft <ChevronDown size={10} /></>
+                        )}
+                      </button>
+                    )}
+                    <button
+                      disabled={isPending}
+                      onClick={() => individualAction(target.id, "approve")}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-[var(--radius-sm)] bg-[var(--accent-subtle)] text-[var(--accent)] text-[10px] font-medium hover:bg-[var(--accent)]/20 transition-colors disabled:opacity-40"
+                    >
+                      {isPending ? <Loader2 size={10} className="animate-spin" /> : <CheckCircle size={10} />}
+                      Approve
+                    </button>
+                    <button
+                      disabled={isPending}
+                      onClick={() => individualAction(target.id, "reject")}
+                      className="flex items-center justify-center p-1 rounded text-[var(--text-secondary)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-colors disabled:opacity-40"
+                      title="Reject"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Draft email preview */}
+                <AnimatePresence>
+                  {isExpanded && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.15 }}
+                      className="overflow-hidden"
+                    >
+                      <div className="mt-3 pt-3 border-t border-[var(--border)]">
+                        {draft ? (
+                          <div className="rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--bg-secondary)] p-3 space-y-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-semibold text-[var(--text-secondary)] uppercase tracking-wide">Subject</span>
+                              <span className="text-xs text-[var(--text-primary)]">{draft.subject}</span>
+                            </div>
+                            <div className="border-t border-[var(--border)] pt-2">
+                              <p className="text-xs text-[var(--text-secondary)] whitespace-pre-wrap leading-relaxed">
+                                {draft.body}
+                              </p>
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-[var(--text-secondary)] italic">
+                            No email draft available for this contact.
+                          </p>
+                        )}
                       </div>
-                    )}
-                    {t.selectedAngle && (
-                      <p className="text-[10px] text-[var(--text-secondary)] mt-1.5 line-clamp-2 italic">
-                        {t.selectedAngle}
-                      </p>
-                    )}
-                  </div>
-                ))}
-                {colTargets.length === 0 && (
-                  <div className="rounded-[var(--radius-sm)] border border-dashed border-[var(--border)] px-3 py-5 text-center">
-                    <p className="text-[11px] text-[var(--text-secondary)]">Empty</p>
-                  </div>
-                )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             </div>
-          );
-        })}
-      </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -186,15 +496,24 @@ function ActivityTab({ logs }: { logs: AgentLog[] }) {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function CampaignDetail({ campaign: initial }: { campaign: CampaignFull }) {
-  const router = useRouter();
   const [campaign, setCampaign] = useState(initial);
-  const [tab, setTab] = useState<"pipeline" | "activity" | "settings">("pipeline");
+  const [allTargets, setAllTargets] = useState(initial.campaignTargets);
+  const [tab, setTab] = useState<"pipeline" | "approvals" | "activity" | "settings">("pipeline");
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState("");
 
   const canActivate = campaign.status === "DRAFT" || campaign.status === "PAUSED";
   const canPause = campaign.status === "ACTIVE";
   const canEdit = campaign.status === "DRAFT" || campaign.status === "PAUSED";
+
+  const pendingApprovalCount = allTargets.filter((t) => t.status === "DISCOVERED").length;
+
+  // Shared state updater — used by both Pipeline and Approvals tabs
+  const handleStatusChange = (targetIds: string[], newStatus: TargetStatus) => {
+    setAllTargets((prev) =>
+      prev.map((t) => (targetIds.includes(t.id) ? { ...t, status: newStatus } : t))
+    );
+  };
 
   const doAction = async (endpoint: string) => {
     setActionLoading(true);
@@ -222,9 +541,12 @@ export default function CampaignDetail({ campaign: initial }: { campaign: Campai
     : 0;
 
   const tabs = [
-    { id: "pipeline" as const, label: "Pipeline", icon: Users },
-    { id: "activity" as const, label: "Activity", icon: Bot },
-    { id: "settings" as const, label: "Settings", icon: Settings },
+    { id: "pipeline" as const, label: "Pipeline", icon: Users, badge: null },
+    ...(campaign.approvalMode === "SUPERVISED"
+      ? [{ id: "approvals" as const, label: "Approvals", icon: CheckCircle, badge: pendingApprovalCount || null }]
+      : []),
+    { id: "activity" as const, label: "Activity", icon: Bot, badge: null },
+    { id: "settings" as const, label: "Settings", icon: Settings, badge: null },
   ];
 
   return (
@@ -292,7 +614,7 @@ export default function CampaignDetail({ campaign: initial }: { campaign: Campai
         <MetricCard label="Meetings" value={campaign.totalMeetings} sub={`${meetingPct}% meeting rate`} />
         <MetricCard
           label="Targets"
-          value={campaign.campaignTargets.length}
+          value={allTargets.length}
           sub={`${campaign.approvalMode.toLowerCase()} mode`}
         />
       </div>
@@ -300,7 +622,7 @@ export default function CampaignDetail({ campaign: initial }: { campaign: Campai
       {/* Tabs */}
       <div>
         <div className="flex items-center gap-1 border-b border-[var(--border)] mb-5">
-          {tabs.map(({ id, label, icon: Icon }) => {
+          {tabs.map(({ id, label, icon: Icon, badge }) => {
             const active = tab === id;
             return (
               <button
@@ -312,6 +634,11 @@ export default function CampaignDetail({ campaign: initial }: { campaign: Campai
               >
                 <Icon size={14} />
                 {label}
+                {badge != null && (
+                  <span className="ml-0.5 min-w-[16px] h-4 px-1 rounded-full bg-[var(--accent)] text-[var(--bg-primary)] text-[9px] font-semibold flex items-center justify-center">
+                    {badge}
+                  </span>
+                )}
                 {active && (
                   <motion.div
                     layoutId="detail-tab-indicator"
@@ -331,7 +658,22 @@ export default function CampaignDetail({ campaign: initial }: { campaign: Campai
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.12 }}
           >
-            {tab === "pipeline" && <PipelineTab targets={campaign.campaignTargets} />}
+            {tab === "pipeline" && (
+              <PipelineTab
+                targets={allTargets}
+                campaignId={campaign.id}
+                approvalMode={campaign.approvalMode}
+                isActive={campaign.status === "ACTIVE"}
+                onStatusChange={handleStatusChange}
+              />
+            )}
+            {tab === "approvals" && (
+              <ApprovalsTab
+                targets={allTargets}
+                campaignId={campaign.id}
+                onStatusChange={handleStatusChange}
+              />
+            )}
             {tab === "activity" && <ActivityTab logs={campaign.agentLogs} />}
             {tab === "settings" && (
               <div className="rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--bg-card)] p-6 space-y-4">

@@ -25,8 +25,12 @@ export async function POST(req: Request) {
     if (!email.contact?.email || !email.sentAt) continue;
 
     try {
-      const hasReply = await checkForReply(email.userId, email.contact.email, email.sentAt);
-      if (!hasReply) continue;
+      const { replied, method } = await checkForReply(email.userId, email.contact.email, email.sentAt, {
+        gmailThreadId: email.gmailThreadId,
+        originalSubject: email.subject,
+      });
+
+      if (!replied) continue;
 
       await prisma.email.update({
         where: { id: email.id },
@@ -38,7 +42,18 @@ export async function POST(req: Request) {
         data: { status: "replied" },
       });
 
+      // Find the campaign this email belongs to (if any) for AgentLog
+      const campaignTarget = email.contact
+        ? await prisma.campaignTarget.findFirst({
+            where: { contactId: email.contact.id, status: { in: ["CONTACTED", "FOLLOWED_UP"] } },
+            select: { id: true, campaignId: true, fullName: true },
+            orderBy: { updatedAt: "desc" },
+          })
+        : null;
+
+      let calendarInviteSent = false;
       const slots = await getAvailableSlots(email.userId);
+
       if (slots.length > 0) {
         const slotList = slots.map((s, i) => `${i + 1}. ${s}`).join("\n");
         const inviteBody = [
@@ -69,6 +84,32 @@ export async function POST(req: Request) {
             title: `Coffee Chat with ${email.contact.name}`,
             dateTime: addDays(new Date(), 7),
             status: "pending",
+          },
+        });
+
+        calendarInviteSent = true;
+      }
+
+      // Update campaign target status and metrics if this email is campaign-linked
+      if (campaignTarget) {
+        await prisma.campaignTarget.update({
+          where: { id: campaignTarget.id },
+          data: { status: "REPLIED" },
+        });
+
+        await prisma.campaign.update({
+          where: { id: campaignTarget.campaignId },
+          data: { totalReplies: { increment: 1 } },
+        });
+
+        await prisma.agentLog.create({
+          data: {
+            campaignId: campaignTarget.campaignId,
+            targetId: campaignTarget.id,
+            action: "REPLY_DETECTED",
+            reasoning: `Reply detected from ${campaignTarget.fullName} (${email.contact.email}) using method: ${method}. ${calendarInviteSent ? "Calendar invite sent." : "No available slots — invite not sent."}`,
+            input: { emailId: email.id, recipientEmail: email.contact.email },
+            output: { method, calendarInviteSent, gmailThreadId: email.gmailThreadId ?? null },
           },
         });
       }

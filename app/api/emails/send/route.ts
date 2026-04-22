@@ -13,7 +13,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Recipient email is required" }, { status: 400 });
   }
 
-  // Save to database
+  let gmailThreadId: string | null = null;
+  try {
+    const result = await sendEmail(session.user.id, recipientEmail, subject, body);
+    gmailThreadId = result.gmailThreadId ?? null;
+  } catch (err) {
+    console.error("Email send failed:", err);
+  }
+
   const emailRecord = await prisma.email.create({
     data: {
       userId: session.user.id,
@@ -21,19 +28,11 @@ export async function POST(req: Request) {
       subject,
       body,
       template: template ?? "custom",
+      gmailThreadId,
       sentAt: new Date(),
     },
   });
 
-  // Send via the user's active email provider
-  try {
-    await sendEmail(session.user.id, recipientEmail, subject, body);
-  } catch (err) {
-    console.error("Email send failed:", err);
-    // Email is still saved to DB even if send fails
-  }
-
-  // Update contact status
   if (contactId) {
     await prisma.contact.updateMany({
       where: { id: contactId, userId: session.user.id, status: "new" },

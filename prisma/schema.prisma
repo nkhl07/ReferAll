@@ -102,9 +102,10 @@ model Email {
   subject   String
   body      String     @db.Text
   template  String
-  sentAt    DateTime?
-  repliedAt DateTime?
-  followUps FollowUp[]
+  sentAt        DateTime?
+  repliedAt     DateTime?
+  gmailThreadId String?
+  followUps     FollowUp[]
   createdAt DateTime   @default(now())
 }
 

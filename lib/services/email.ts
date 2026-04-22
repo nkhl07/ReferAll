@@ -18,14 +18,16 @@ export async function sendEmail(
   to: string,
   subject: string,
   body: string
-): Promise<void> {
+): Promise<{ gmailThreadId?: string | null }> {
   const { provider, accessToken } = await getEmailProvider(userId);
 
   if (provider === "google") {
-    await sendViaGmail(accessToken, to, subject, body);
+    return sendViaGmail(accessToken, to, subject, body);
   } else if (provider === "microsoft-entra-id") {
     await sendViaOutlook(accessToken, to, subject, body);
+    return {};
   }
+  return {};
 }
 
 async function sendViaGmail(
@@ -33,7 +35,7 @@ async function sendViaGmail(
   to: string,
   subject: string,
   body: string
-): Promise<void> {
+): Promise<{ gmailThreadId: string | null }> {
   const oauth2Client = new google.auth.OAuth2();
   oauth2Client.setCredentials({ access_token: accessToken });
   const gmail = google.gmail({ version: "v1", auth: oauth2Client });
@@ -47,7 +49,8 @@ async function sendViaGmail(
   ].join("\n");
 
   const raw = Buffer.from(message).toString("base64url");
-  await gmail.users.messages.send({ userId: "me", requestBody: { raw } });
+  const res = await gmail.users.messages.send({ userId: "me", requestBody: { raw } });
+  return { gmailThreadId: res.data.threadId ?? null };
 }
 
 async function sendViaOutlook(
@@ -81,48 +84,85 @@ async function sendViaOutlook(
 export async function checkForReply(
   userId: string,
   recipientEmail: string,
-  sentAfter: Date
-): Promise<boolean> {
+  sentAfter: Date,
+  options: { gmailThreadId?: string | null; originalSubject?: string } = {}
+): Promise<{ replied: boolean; method: string }> {
   try {
     const { provider, accessToken } = await getEmailProvider(userId);
 
     if (provider === "google") {
-      return checkGmailReply(accessToken, recipientEmail, sentAfter);
+      return checkGmailReply(accessToken, recipientEmail, sentAfter, options.gmailThreadId, options.originalSubject);
     } else if (provider === "microsoft-entra-id") {
-      return checkOutlookReply(accessToken, recipientEmail, sentAfter);
+      return checkOutlookReply(accessToken, recipientEmail, sentAfter, options.originalSubject);
     }
-    return false;
+    return { replied: false, method: "unsupported_provider" };
   } catch {
-    return false;
+    return { replied: false, method: "error" };
   }
 }
 
 async function checkGmailReply(
   accessToken: string,
   recipientEmail: string,
-  sentAfter: Date
-): Promise<boolean> {
+  sentAfter: Date,
+  gmailThreadId?: string | null,
+  originalSubject?: string
+): Promise<{ replied: boolean; method: string }> {
   const oauth2Client = new google.auth.OAuth2();
   oauth2Client.setCredentials({ access_token: accessToken });
   const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-  const q = `from:${recipientEmail} after:${Math.floor(sentAfter.getTime() / 1000)}`;
+  // Primary: check the specific thread for a reply from the recipient
+  if (gmailThreadId) {
+    const thread = await gmail.users.threads.get({
+      userId: "me",
+      id: gmailThreadId,
+      format: "metadata",
+      metadataHeaders: ["From"],
+    });
+
+    const messages = thread.data.messages ?? [];
+    // First message is the outbound email; any subsequent message from the recipient is a reply
+    const hasReply = messages.slice(1).some((msg) => {
+      const from = msg.payload?.headers?.find((h) => h.name === "From")?.value ?? "";
+      return from.toLowerCase().includes(recipientEmail.toLowerCase());
+    });
+
+    return { replied: hasReply, method: "thread_id" };
+  }
+
+  // Fallback: subject-scoped search for emails sent before this fix that have no threadId
+  const strippedSubject = (originalSubject ?? "").replace(/^(Re:\s*)+/i, "").trim();
+  const subjectFilter = strippedSubject ? ` subject:"${strippedSubject}"` : "";
+  const q = `from:${recipientEmail}${subjectFilter} after:${Math.floor(sentAfter.getTime() / 1000)}`;
   const res = await gmail.users.messages.list({ userId: "me", q, maxResults: 1 });
-  return (res.data.messages?.length ?? 0) > 0;
+  return { replied: (res.data.messages?.length ?? 0) > 0, method: "subject_search" };
 }
 
 async function checkOutlookReply(
   accessToken: string,
   recipientEmail: string,
-  sentAfter: Date
-): Promise<boolean> {
-  const filter = `from/emailAddress/address eq '${recipientEmail}' and receivedDateTime ge ${sentAfter.toISOString()}`;
+  sentAfter: Date,
+  originalSubject?: string
+): Promise<{ replied: boolean; method: string }> {
+  const strippedSubject = (originalSubject ?? "").replace(/^(Re:\s*)+/i, "").trim();
+
+  // Scope to sender + date + subject to avoid false positives from unrelated emails
+  const parts = [
+    `from/emailAddress/address eq '${recipientEmail}'`,
+    `receivedDateTime ge ${sentAfter.toISOString()}`,
+  ];
+  if (strippedSubject) {
+    parts.push(`contains(subject, '${strippedSubject.replace(/'/g, "''")}')`);
+  }
+
+  const filter = parts.join(" and ");
   const response = await fetch(
     `https://graph.microsoft.com/v1.0/me/messages?$filter=${encodeURIComponent(filter)}&$top=1&$select=id`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
 
-  if (!response.ok) return false;
+  if (!response.ok) return { replied: false, method: "outlook_error" };
   const data = await response.json();
-  return (data.value?.length ?? 0) > 0;
+  return { replied: (data.value?.length ?? 0) > 0, method: "outlook_subject_search" };
 }

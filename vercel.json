@@ -1,6 +1,14 @@
 {
   "crons": [
     {
+      "path": "/api/cron/run-discovery",
+      "schedule": "0 */6 * * *"
+    },
+    {
+      "path": "/api/cron/run-outreach",
+      "schedule": "0 10 * * *"
+    },
+    {
       "path": "/api/cron/check-follow-ups",
       "schedule": "0 14 * * *"
     },
